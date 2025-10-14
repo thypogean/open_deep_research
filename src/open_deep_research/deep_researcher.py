@@ -4,6 +4,7 @@ import asyncio
 from typing import Literal
 
 from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -51,13 +52,22 @@ from open_deep_research.utils import (
     remove_up_to_last_ai_message,
     think_tool,
 )
+from open_deep_research.duckduckgo_search import duckduckgo_search
 
 # Initialize a configurable model that we will use throughout the agent
-configurable_model = init_chat_model(
-    configurable_fields=("model", "max_tokens", "api_key"),
-)
+# configurable_model = init_chat_model(
+#     configurable_fields=("model", "max_tokens", "api_key"),
+# )
 
-async def clarify_with_user(state: AgentState, config: RunnableConfig) -> Command[Literal["write_research_brief", "__end__"]]:
+# MODEL = "qwen/qwen3-14b"
+MODEL = "openai/gpt-oss-20b"
+API_URL = "http://172.20.10.7:1234/v1"
+configurable_model = ChatOpenAI(base_url=API_URL, model=MODEL, api_key="asdfasdfsf")
+
+
+async def clarify_with_user(
+    state: AgentState, config: RunnableConfig
+) -> Command[Literal["write_research_brief", "__end__"]]:
     """Analyze user messages and ask clarifying questions if the research scope is unclear.
     
     This function determines whether the user's request needs clarification before proceeding
@@ -267,68 +277,90 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
     
     # Handle think_tool calls (strategic reflection)
     think_tool_calls = [
-        tool_call for tool_call in most_recent_message.tool_calls 
+        tool_call
+        for tool_call in most_recent_message.tool_calls
         if tool_call["name"] == "think_tool"
     ]
-    
+
     for tool_call in think_tool_calls:
         reflection_content = tool_call["args"]["reflection"]
-        all_tool_messages.append(ToolMessage(
-            content=f"Reflection recorded: {reflection_content}",
-            name="think_tool",
-            tool_call_id=tool_call["id"]
-        ))
-    
+        all_tool_messages.append(
+            ToolMessage(
+                content=f"Reflection recorded: {reflection_content}",
+                name="think_tool",
+                tool_call_id=tool_call["id"],
+            )
+        )
+
     # Handle ConductResearch calls (research delegation)
     conduct_research_calls = [
-        tool_call for tool_call in most_recent_message.tool_calls 
+        tool_call
+        for tool_call in most_recent_message.tool_calls
         if tool_call["name"] == "ConductResearch"
     ]
-    
+
     if conduct_research_calls:
         try:
             # Limit concurrent research units to prevent resource exhaustion
-            allowed_conduct_research_calls = conduct_research_calls[:configurable.max_concurrent_research_units]
-            overflow_conduct_research_calls = conduct_research_calls[configurable.max_concurrent_research_units:]
-            
+            allowed_conduct_research_calls = conduct_research_calls[
+                : configurable.max_concurrent_research_units
+            ]
+            overflow_conduct_research_calls = conduct_research_calls[
+                configurable.max_concurrent_research_units :
+            ]
+
             # Execute research tasks in parallel
             research_tasks = [
-                researcher_subgraph.ainvoke({
-                    "researcher_messages": [
-                        HumanMessage(content=tool_call["args"]["research_topic"])
-                    ],
-                    "research_topic": tool_call["args"]["research_topic"]
-                }, config) 
+                researcher_subgraph.ainvoke(
+                    {
+                        "researcher_messages": [
+                            HumanMessage(content=tool_call["args"]["research_topic"])
+                        ],
+                        "research_topic": tool_call["args"]["research_topic"],
+                    },
+                    config,
+                )
                 for tool_call in allowed_conduct_research_calls
             ]
-            
+
             tool_results = await asyncio.gather(*research_tasks)
-            
+
             # Create tool messages with research results
-            for observation, tool_call in zip(tool_results, allowed_conduct_research_calls):
-                all_tool_messages.append(ToolMessage(
-                    content=observation.get("compressed_research", "Error synthesizing research report: Maximum retries exceeded"),
-                    name=tool_call["name"],
-                    tool_call_id=tool_call["id"]
-                ))
-            
+            for observation, tool_call in zip(
+                tool_results, allowed_conduct_research_calls
+            ):
+                all_tool_messages.append(
+                    ToolMessage(
+                        content=observation.get(
+                            "compressed_research",
+                            "Error synthesizing research report: Maximum retries exceeded",
+                        ),
+                        name=tool_call["name"],
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+
             # Handle overflow research calls with error messages
             for overflow_call in overflow_conduct_research_calls:
-                all_tool_messages.append(ToolMessage(
-                    content=f"Error: Did not run this research as you have already exceeded the maximum number of concurrent research units. Please try again with {configurable.max_concurrent_research_units} or fewer research units.",
-                    name="ConductResearch",
-                    tool_call_id=overflow_call["id"]
-                ))
-            
+                all_tool_messages.append(
+                    ToolMessage(
+                        content=f"Error: Did not run this research as you have already exceeded the maximum number of concurrent research units. Please try again with {configurable.max_concurrent_research_units} or fewer research units.",
+                        name="ConductResearch",
+                        tool_call_id=overflow_call["id"],
+                    )
+                )
+
             # Aggregate raw notes from all research results
-            raw_notes_concat = "\n".join([
-                "\n".join(observation.get("raw_notes", [])) 
-                for observation in tool_results
-            ])
-            
+            raw_notes_concat = "\n".join(
+                [
+                    "\n".join(observation.get("raw_notes", []))
+                    for observation in tool_results
+                ]
+            )
+
             if raw_notes_concat:
                 update_payload["raw_notes"] = [raw_notes_concat]
-                
+
         except Exception as e:
             # Handle research execution errors
             if is_token_limit_exceeded(e, configurable.research_model) or True:
@@ -337,10 +369,10 @@ async def supervisor_tools(state: SupervisorState, config: RunnableConfig) -> Co
                     goto=END,
                     update={
                         "notes": get_notes_from_tool_calls(supervisor_messages),
-                        "research_brief": state.get("research_brief", "")
-                    }
+                        "research_brief": state.get("research_brief", ""),
+                    },
                 )
-    
+
     # Step 3: Return command with all tool results
     update_payload["supervisor_messages"] = all_tool_messages
     return Command(

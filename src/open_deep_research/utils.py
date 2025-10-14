@@ -28,6 +28,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.config import get_store
 from mcp import McpError
 from tavily import AsyncTavilyClient
+from duckduckgo_search import DDGS
 
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.prompts import summarize_webpage_prompt
@@ -171,6 +172,48 @@ async def tavily_search_async(
     # Execute all search queries in parallel and return results
     search_results = await asyncio.gather(*search_tasks)
     return search_results
+
+
+##########################
+# DuckDuckGo Search Tool
+##########################
+
+from duckduckgo_search import DDGS
+
+@tool(description="DuckDuckGo search tool for comprehensive web results")
+async def duckduckgo_search_tool(
+    queries: List[str],
+    max_results: Annotated[int, InjectedToolArg] = 5,
+    config: RunnableConfig = None
+) -> str:
+    """Fetch and summarize search results from DuckDuckGo."""
+    search_results = []
+
+    def search_sync(query):
+        with DDGS() as ddgs:
+            return list(ddgs.text(query, max_results=max_results))
+
+    # Run each search in a thread to avoid blocking
+    tasks = [asyncio.to_thread(search_sync, query) for query in queries]
+    results_list = await asyncio.gather(*tasks)
+
+    for query, results in zip(queries, results_list):
+        search_results.append({"query": query, "results": results})
+
+    # Format the output
+    formatted_output = "Search results from DuckDuckGo:\n\n"
+    for i, response in enumerate(search_results, start=1):
+        formatted_output += f"\n\n=== QUERY {i}: {response['query']} ===\n"
+        for j, result in enumerate(response["results"], start=1):
+            title = result.get("title", "No title")
+            body = result.get("body", "")
+            url = result.get("href", "")
+            formatted_output += (
+                f"\n--- RESULT {j}: {title} ---\nURL: {url}\n\n{body}\n"
+                + "-" * 80 + "\n"
+            )
+
+    return formatted_output
 
 async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
     """Summarize webpage content using AI model with timeout protection.
@@ -558,7 +601,14 @@ async def get_search_tool(search_api: SearchAPI):
             "name": "web_search"
         }
         return [search_tool]
-        
+    elif search_api == SearchAPI.DUCKDUCKGO:
+        search_tool = duckduckgo_search_tool
+        search_tool.metadata = {
+            **(search_tool.metadata or {}),
+            "type": "search",
+            "name": "web_search"
+        }
+        return [search_tool]
     elif search_api == SearchAPI.NONE:
         # No search functionality configured
         return []
