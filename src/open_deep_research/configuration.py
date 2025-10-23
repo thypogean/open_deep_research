@@ -45,7 +45,7 @@ class Configuration(BaseModel):
         metadata={
             "x_oap_ui_config": {
                 "type": "number",
-                "default": 3,
+                "default": 2,
                 "min": 1,
                 "max": 10,
                 "description": "Maximum number of retries for structured output calls from models"
@@ -63,13 +63,13 @@ class Configuration(BaseModel):
         }
     )
     max_concurrent_research_units: int = Field(
-        default=5,
+        default=1,
         metadata={
             "x_oap_ui_config": {
                 "type": "slider",
-                "default": 5,
+                "default": 1,
                 "min": 1,
-                "max": 20,
+                "max": 5,
                 "step": 1,
                 "description": "Maximum number of research units to run concurrently. This will allow the researcher to use multiple sub-agents to conduct research. Note: with more concurrency, you may run into rate limits."
             }
@@ -77,13 +77,14 @@ class Configuration(BaseModel):
     )
     # Research Configuration
     search_api: SearchAPI = Field(
-        default=SearchAPI.DUCKDUCKGO,
+        default=SearchAPI.TAVILY,
         metadata={
             "x_oap_ui_config": {
                 "type": "select",
                 "default": "duckduckgo_search",
                 "description": "Search API to use for research. NOTE: Make sure your Researcher Model supports the selected search API.",
                 "options": [
+                    {"label": "Tavily", "value": SearchAPI.DUCKDUCKGO.value},
                     {"label": "Tavily", "value": SearchAPI.TAVILY.value},
                     {"label": "OpenAI Native Web Search", "value": SearchAPI.OPENAI.value},
                     {"label": "Anthropic Native Web Search", "value": SearchAPI.ANTHROPIC.value},
@@ -97,7 +98,7 @@ class Configuration(BaseModel):
         metadata={
             "x_oap_ui_config": {
                 "type": "slider",
-                "default": 6,
+                "default": 1,
                 "min": 1,
                 "max": 10,
                 "step": 1,
@@ -110,7 +111,7 @@ class Configuration(BaseModel):
         metadata={
             "x_oap_ui_config": {
                 "type": "slider",
-                "default": 10,
+                "default": 1,
                 "min": 1,
                 "max": 30,
                 "step": 1,

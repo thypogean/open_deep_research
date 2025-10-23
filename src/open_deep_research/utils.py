@@ -9,6 +9,7 @@ from typing import Annotated, Any, Dict, List, Literal, Optional
 
 import aiohttp
 from langchain.chat_models import init_chat_model
+from langchain_openai import ChatOpenAI
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -33,6 +34,16 @@ from duckduckgo_search import DDGS
 from open_deep_research.configuration import Configuration, SearchAPI
 from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+
+MODEL_PROVIDER_API_BASE_URL = os.getenv('MODEL_PROVIDER_API_BASE_URL')
+MODEL_NAME = os.getenv('MODEL_NAME')
+MODEL_PROVIDER_API_KEY = os.getenv('MODEL_PROVIDER_API_KEY')
+
 
 ##########################
 # Tavily Search Tool Utils
@@ -59,6 +70,7 @@ async def tavily_search(
     Returns:
         Formatted string containing summarized search results
     """
+    print(f"TAVILY search called with queries={queries}, max_results={max_results}")
     # Step 1: Execute search queries asynchronously
     search_results = await tavily_search_async(
         queries,
@@ -77,20 +89,14 @@ async def tavily_search(
                 unique_results[url] = {**result, "query": response['query']}
     
     # Step 3: Set up the summarization model with configuration
-    configurable = Configuration.from_runnable_config(config)
-    
+    # configurable = Configuration.from_runnable_config(config)
     # Character limit to stay within model token limits (configurable)
-    max_char_to_include = configurable.max_content_length
+    # max_char_to_include = configurable.max_content_length
     
     # Initialize summarization model with retry logic
-    model_api_key = get_api_key_for_model(configurable.summarization_model, config)
-    summarization_model = init_chat_model(
-        model=configurable.summarization_model,
-        max_tokens=configurable.summarization_model_max_tokens,
-        api_key=model_api_key,
-        tags=["langsmith:nostream"]
-    ).with_structured_output(Summary).with_retry(
-        stop_after_attempt=configurable.max_structured_output_retries
+    # model_api_key = get_api_key_for_model(configurable.summarization_model, config)
+    summarization_model = ChatOpenAI(base_url=MODEL_PROVIDER_API_BASE_URL, model=MODEL_NAME, api_key = MODEL_PROVIDER_API_KEY).with_structured_output(Summary).with_retry(
+        stop_after_attempt=5
     )
     
     # Step 4: Create summarization tasks (skip empty content)
@@ -102,7 +108,8 @@ async def tavily_search(
         noop() if not result.get("raw_content") 
         else summarize_webpage(
             summarization_model, 
-            result['raw_content'][:max_char_to_include]
+            result['raw_content']
+            # [:max_char_to_include]
         )
         for result in unique_results.values()
     ]
@@ -156,7 +163,7 @@ async def tavily_search_async(
         List of search result dictionaries from Tavily API
     """
     # Initialize the Tavily client with API key from config
-    tavily_client = AsyncTavilyClient(api_key=get_tavily_api_key(config))
+    tavily_client = AsyncTavilyClient(api_key=None)
     
     # Create search tasks for parallel execution
     search_tasks = [
@@ -187,6 +194,7 @@ async def duckduckgo_search_tool(
     config: RunnableConfig = None
 ) -> str:
     """Fetch and summarize search results from DuckDuckGo."""
+    print(f"🦆 DuckDuckGo search called with queries={queries}, max_results={max_results}")
     search_results = []
 
     def search_sync(query):
@@ -194,12 +202,16 @@ async def duckduckgo_search_tool(
             return list(ddgs.text(query, max_results=max_results))
 
     # Run each search in a thread to avoid blocking
-    tasks = [asyncio.to_thread(search_sync, query) for query in queries]
-    results_list = await asyncio.gather(*tasks)
+    # tasks = [asyncio.to_thread(search_sync, query) for query in queries]
+    # results_list = await asyncio.gather(*tasks)
 
-    for query, results in zip(queries, results_list):
+    # for query, results in zip(queries, results_list):
+    #     search_results.append({"query": query, "results": results})
+
+    for query in queries:
+        await asyncio.sleep(2)
+        results = await asyncio.to_thread(search_sync, query)
         search_results.append({"query": query, "results": results})
-
     # Format the output
     formatted_output = "Search results from DuckDuckGo:\n\n"
     for i, response in enumerate(search_results, start=1):
@@ -212,7 +224,7 @@ async def duckduckgo_search_tool(
                 f"\n--- RESULT {j}: {title} ---\nURL: {url}\n\n{body}\n"
                 + "-" * 80 + "\n"
             )
-
+    print(formatted_output)
     return formatted_output
 
 async def summarize_webpage(model: BaseChatModel, webpage_content: str) -> str:
